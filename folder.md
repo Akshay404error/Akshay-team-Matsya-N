@@ -1,6 +1,6 @@
 # File Tree: fishmarket-backend
 
-Generated on: 8/28/2025, 9:16:14 AM
+Generated on: 8/29/2025, 9:51:01 AM
 Root path: `d:\Backend & Database (Postgres + PostGIS) (AKSHAY TEAM) v.0.0.1\fishmarket-backend`
 
 ```
@@ -32,6 +32,8 @@ Root path: `d:\Backend & Database (Postgres + PostGIS) (AKSHAY TEAM) v.0.0.1\fis
 │   │   ├── 🐚 backup_db.sh
 │   │   ├── 🐚 reset_db.sh
 │   │   ├── 🐚 run_migrations.sh
+│   │   ├── 🐚 seed_data.sh
+│   │   ├── 📄 setup.js
 │   │   └── 🐚 setup_db.sh
 │   ├── 📁 deployment/
 │   │   ├── 🐚 build.sh
@@ -104,8 +106,7 @@ Root path: `d:\Backend & Database (Postgres + PostGIS) (AKSHAY TEAM) v.0.0.1\fis
 │   │   │   └── 📁 production/
 │   │   │       └── 🗄️ initial_data.sql
 │   │   ├── 📄 connection.js
-│   │   ├── 🗄️ schema.sql
-│   │   └── 📄 setup.js
+│   │   └── 🗄️ schema.sql
 │   ├── 📁 middleware/
 │   │   ├── 📄 auth.js
 │   │   ├── 📄 errorHandler.js
@@ -201,6 +202,7 @@ Root path: `d:\Backend & Database (Postgres + PostGIS) (AKSHAY TEAM) v.0.0.1\fis
 ├── 📄 .env.example
 ├── 📄 .env.testing
 ├── 🚫 .gitignore
+├── 📜 LICENSE
 ├── 📖 README.md
 ├── 📄 eslint.config.js
 ├── 📄 jest.config.js

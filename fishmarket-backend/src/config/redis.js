@@ -1,278 +1,104 @@
 const redis = require('redis');
-const logger = require('../utils/logger');
+const logger = require('./logger');
 
-// Redis configuration
-const redisConfig = {
-  host: process.env.REDIS_HOST || 'localhost',
-  port: parseInt(process.env.REDIS_PORT) || 6379,
-  password: process.env.REDIS_PASSWORD || undefined,
-  db: parseInt(process.env.REDIS_DB) || 0,
-  
-  // Connection options
-  retryDelayOnFailover: 100,
-  maxRetriesPerRequest: 3,
-  lazyConnect: true,
-  keepAlive: 30000,
-};
+const client = redis.createClient({
+  url: process.env.REDIS_URL || 'redis://localhost:6379',
+  retry_strategy: (options) => {
+    if (options.error && options.error.code === 'ECONNREFUSED') {
+      logger.error('Redis server refused connection');
+      return new Error('Redis server refused connection');
+    }
+    if (options.total_retry_time > 1000 * 60 * 60) {
+      logger.error('Redis retry time exhausted');
+      return new Error('Retry time exhausted');
+    }
+    if (options.attempt > 10) {
+      return undefined;
+    }
+    return Math.min(options.attempt * 100, 3000);
+  }
+});
 
-// Create Redis clients
-const createRedisClient = (dbNumber = 0) => {
-  const client = redis.createClient({
-    socket: {
-      host: redisConfig.host,
-      port: redisConfig.port,
-      keepAlive: redisConfig.keepAlive
-    },
-    password: redisConfig.password,
-    database: dbNumber
-  });
+client.on('connect', () => {
+  logger.info('Connected to Redis server');
+});
 
-  // Handle connection events
-  client.on('connect', () => {
-    logger.info(`Redis client connected to DB ${dbNumber}`);
-  });
+client.on('error', (err) => {
+  logger.error('Redis connection error:', err);
+});
 
-  client.on('ready', () => {
-    logger.info(`Redis client ready on DB ${dbNumber}`);
-  });
+client.on('ready', () => {
+  logger.info('Redis client ready');
+});
 
-  client.on('error', (err) => {
-    logger.error(`Redis client error on DB ${dbNumber}:`, err);
-  });
+client.on('end', () => {
+  logger.info('Redis connection ended');
+});
 
-  client.on('end', () => {
-    logger.info(`Redis client disconnected from DB ${dbNumber}`);
-  });
-
-  return client;
-};
-
-// Main Redis client for general caching
-const redisClient = createRedisClient(parseInt(process.env.REDIS_DB) || 0);
-
-// Session Redis client (separate DB)
-const sessionClient = createRedisClient(parseInt(process.env.REDIS_SESSION_DB) || 1);
-
-// Initialize connections
-const initializeRedis = async () => {
+// Connect to Redis
+const connectRedis = async () => {
   try {
-    await redisClient.connect();
-    await sessionClient.connect();
-    logger.info('Redis clients initialized successfully');
-    return true;
-  } catch (err) {
-    logger.error('Redis initialization failed:', err);
-    return false;
+    await client.connect();
+  } catch (error) {
+    logger.error('Failed to connect to Redis:', error);
+    throw error;
   }
 };
 
 // Cache helper functions
 const cache = {
-  // Basic get/set
-  get: async (key) => {
+  async get(key) {
     try {
-      const value = await redisClient.get(key);
-      return value ? JSON.parse(value) : null;
-    } catch (err) {
-      logger.error('Cache get error:', err);
+      const result = await client.get(key);
+      return result ? JSON.parse(result) : null;
+    } catch (error) {
+      logger.error(`Cache get error for key ${key}:`, error);
       return null;
     }
   },
 
-  set: async (key, value, ttlSeconds = 3600) => {
+  async set(key, value, expireInSeconds = 3600) {
     try {
-      const serialized = JSON.stringify(value);
-      await redisClient.setEx(key, ttlSeconds, serialized);
+      await client.setEx(key, expireInSeconds, JSON.stringify(value));
       return true;
-    } catch (err) {
-      logger.error('Cache set error:', err);
+    } catch (error) {
+      logger.error(`Cache set error for key ${key}:`, error);
       return false;
     }
   },
 
-  // Delete key
-  del: async (key) => {
+  async del(key) {
     try {
-      await redisClient.del(key);
+      await client.del(key);
       return true;
-    } catch (err) {
-      logger.error('Cache delete error:', err);
+    } catch (error) {
+      logger.error(`Cache delete error for key ${key}:`, error);
       return false;
     }
   },
 
-  // Check if key exists
-  exists: async (key) => {
+  async exists(key) {
     try {
-      const result = await redisClient.exists(key);
-      return result === 1;
-    } catch (err) {
-      logger.error('Cache exists error:', err);
+      return await client.exists(key);
+    } catch (error) {
+      logger.error(`Cache exists error for key ${key}:`, error);
       return false;
     }
   },
 
-  // Set with expiry
-  expire: async (key, seconds) => {
+  async flushAll() {
     try {
-      await redisClient.expire(key, seconds);
+      await client.flushAll();
       return true;
-    } catch (err) {
-      logger.error('Cache expire error:', err);
+    } catch (error) {
+      logger.error('Cache flush error:', error);
       return false;
     }
   }
 };
-
-// Session helper functions
-const session = {
-  get: async (sessionId) => {
-    try {
-      const value = await sessionClient.get(`session:${sessionId}`);
-      return value ? JSON.parse(value) : null;
-    } catch (err) {
-      logger.error('Session get error:', err);
-      return null;
-    }
-  },
-
-  set: async (sessionId, data, ttlSeconds = 86400) => { // 24 hours default
-    try {
-      const serialized = JSON.stringify(data);
-      await sessionClient.setEx(`session:${sessionId}`, ttlSeconds, serialized);
-      return true;
-    } catch (err) {
-      logger.error('Session set error:', err);
-      return false;
-    }
-  },
-
-  destroy: async (sessionId) => {
-    try {
-      await sessionClient.del(`session:${sessionId}`);
-      return true;
-    } catch (err) {
-      logger.error('Session destroy error:', err);
-      return false;
-    }
-  }
-};
-
-// OTP helper functions
-const otp = {
-  store: async (phone, otpCode, ttlSeconds = 600) => { // 10 minutes default
-    try {
-      const key = `otp:${phone}`;
-      await redisClient.setEx(key, ttlSeconds, otpCode);
-      return true;
-    } catch (err) {
-      logger.error('OTP store error:', err);
-      return false;
-    }
-  },
-
-  verify: async (phone, otpCode) => {
-    try {
-      const key = `otp:${phone}`;
-      const storedOtp = await redisClient.get(key);
-      
-      if (storedOtp === otpCode) {
-        await redisClient.del(key); // Delete after successful verification
-        return true;
-      }
-      return false;
-    } catch (err) {
-      logger.error('OTP verify error:', err);
-      return false;
-    }
-  },
-
-  // Rate limiting for OTP requests
-  checkRateLimit: async (phone, maxRequests = 3, windowSeconds = 3600) => {
-    try {
-      const key = `otp_rate:${phone}`;
-      const current = await redisClient.get(key);
-      
-      if (!current) {
-        await redisClient.setEx(key, windowSeconds, '1');
-        return { allowed: true, remaining: maxRequests - 1 };
-      }
-
-      const count = parseInt(current);
-      if (count >= maxRequests) {
-        const ttl = await redisClient.ttl(key);
-        return { allowed: false, remaining: 0, resetIn: ttl };
-      }
-
-      await redisClient.incr(key);
-      return { allowed: true, remaining: maxRequests - count - 1 };
-    } catch (err) {
-      logger.error('OTP rate limit error:', err);
-      return { allowed: true, remaining: maxRequests - 1 }; // Allow on error
-    }
-  }
-};
-
-// Auction-specific cache helpers
-const auction = {
-  // Store current auction state
-  setState: async (auctionId, state, ttlSeconds = 7200) => { // 2 hours
-    const key = `auction:${auctionId}:state`;
-    return await cache.set(key, state, ttlSeconds);
-  },
-
-  getState: async (auctionId) => {
-    const key = `auction:${auctionId}:state`;
-    return await cache.get(key);
-  },
-
-  // Store bidder list
-  addBidder: async (auctionId, userId) => {
-    try {
-      const key = `auction:${auctionId}:bidders`;
-      await redisClient.sAdd(key, userId.toString());
-      await redisClient.expire(key, 7200); // 2 hours
-      return true;
-    } catch (err) {
-      logger.error('Add bidder error:', err);
-      return false;
-    }
-  },
-
-  getBidders: async (auctionId) => {
-    try {
-      const key = `auction:${auctionId}:bidders`;
-      const bidders = await redisClient.sMembers(key);
-      return bidders.map(id => parseInt(id));
-    } catch (err) {
-      logger.error('Get bidders error:', err);
-      return [];
-    }
-  }
-};
-
-// Graceful shutdown
-const closeRedis = async () => {
-  try {
-    await redisClient.quit();
-    await sessionClient.quit();
-    logger.info('Redis clients closed');
-  } catch (err) {
-    logger.error('Error closing Redis clients:', err);
-  }
-};
-
-// Handle process termination
-process.on('SIGINT', closeRedis);
-process.on('SIGTERM', closeRedis);
 
 module.exports = {
-  redisClient,
-  sessionClient,
-  initializeRedis,
-  cache,
-  session,
-  otp,
-  auction,
-  closeRedis
+  client,
+  connectRedis,
+  cache
 };
